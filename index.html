@@ -71,38 +71,51 @@ h2 {
   <div class="container">
     <hr>
 
-    <p>This is a 2FA QR code generator made in JavaScript that helps you make QR codes from 2FA secrets.</p>
+    <p>This is a 2FA QR code generator made in JS that helps you make QR codes from 2FA secrets.</p>
 
     <hr>
 
     <p>
       <select class="form-control" id="type" autocomplete="off">
         <option value="totp">Time based (TOTP)</option>
-        <option value="hotp">Counter based (HOTP)</option>
+        <option value="hotp" selected>Counter based (HOTP)</option>
       </select>
     </p>
 
-    <p><input class="form-control" type="search" id="secret" placeholder="Secret &mdash; Required" autocomplete="off" spellcheck="false"></p>
+    <div>
+      <p>
+        <input class="form-control" type="search" id="secret" placeholder="Secret (Hex) &mdash; Required" autocomplete="off" spellcheck="false">
+        <button class="form-control" type="button" id="secret_rnd_gen" onclick="onRandomizeClicked()"> Randomize </button>
+        <select class="form-control" id="secret_gen_size" autocomplete="off">
+          <option value="10">10 bytes</option>
+          <option value="20">20 bytes</option>
+          <option value="60">60 bytes</option>
+          <option value="150">120 bytes</option>
+          <option value="250">250 bytes</option>
+        </select>
+      </p>
+    </div>
     <p><input class="form-control" type="search" id="label" placeholder="Label &mdash; Required" autocomplete="off" spellcheck="false"></p>
     <p><input class="form-control" type="search" id="issuer" placeholder="Issuer &mdash; Optional" list="issuers" spellcheck="false"></p>
     <p><input class="form-control" type="search" id="counter" placeholder="Initial counter &mdash; Defaults to 0" pattern="\d+" autocomplete="off" spellcheck="false"></p>
 
     <div class="custom-control custom-checkbox">
-      <p><input class="custom-control-input" type="checkbox" id="advanced_options" autocomplete="off"><label class="custom-control-label" for="advanced_options">Advanced options</label></p>
+      <p><input class="custom-control-input" type="checkbox" id="advanced_options" autocomplete="off" checked><label class="custom-control-label" for="advanced_options">Advanced options</label></p>
     </div>
 
     <div id="advanced_options_container">
       <p>Please note that the advanced options are not supported by the Google Authenticator app (all advanced options are ignored). Yubico Authenticator supports these advanced options.</p>
       <p>
         <select class="form-control" id="algorithm" autocomplete="off">
-          <option value="SHA1">SHA1 algorithm (Default)</option>
-          <option value="SHA256">SHA256 algorithm</option>
+          <option value="SHA1">SHA1 algorithm</option>
+          <option value="SHA256" selected>SHA256 algorithm</option>
           <option value="SHA512">SHA512 algorithm</option>
         </select>
       </p>
       <p>
         <select class="form-control" id="digits" autocomplete="off">
-          <option value="6">6 digits (Default)</option>
+          <option value="4">4 digits</option>
+          <option value="6" selected>6 digits</option>
           <option value="8">8 digits</option>
         </select>
       </p>
@@ -162,6 +175,75 @@ h2 {
     <div class="p-4 text-center" id="qr"></div>
 
 <script>
+
+function toHexString(byteArray) {
+  return Array.prototype.map.call(byteArray, function(byte) {
+    return ('0' + (byte & 0xFF).toString(16)).slice(-2);
+  }).join('');
+}
+
+function toUint8Array(hexString) {
+  var result = [];
+  for (var i = 0; i < hexString.length; i += 2) {
+    result.push(parseInt(hexString.substr(i, 2), 16));
+  }
+  return new Uint8Array(result);
+}
+
+const RFC4648_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function base32Encode (buffer) {
+  const alphabet = RFC4648_ALPHABET;
+  const padding = true;
+  const view = new DataView(buffer);
+
+  let bits = 0
+  let value = 0
+  let output = ''
+
+  for (let i = 0; i < view.byteLength; i++) {
+    value = (value << 8) | view.getUint8(i)
+    bits += 8
+
+    while (bits >= 5) {
+      output += alphabet[(value >>> (bits - 5)) & 31]
+      bits -= 5
+    }
+  }
+
+  if (bits > 0) {
+    output += alphabet[(value << (5 - bits)) & 31]
+  }
+
+  if (padding) {
+    while ((output.length % 8) !== 0) {
+      output += '='
+    }
+  }
+
+  return output
+}
+
+function validateAndEncodeSecret(rawValue) {
+  rawValue = rawValue.replace(/ /g, '');
+  const re = /[0-9A-Fa-f]/g;
+
+  if(rawValue.length % 2 != 0 || !re.test(rawValue)) {
+      return "";
+  }
+
+  return base32Encode(toUint8Array(rawValue).buffer);
+}
+
+function onRandomizeClicked() {
+  let size = $("#secret_gen_size").val() || 20;
+  let array = new Uint8Array(size);
+  window.crypto.getRandomValues(array);
+  $("#secret")[0].value = toHexString(array);
+
+  updateQr();
+}
+
 // make a nice QR code as the favicon
 $("#qr").empty().qrcode({
   render: "image",
@@ -169,13 +251,13 @@ $("#qr").empty().qrcode({
 });
 $("link[rel=icon]").prop("href", $("#qr img").prop("src"));
 
-function advanced_options_changed() {
+function onAdvancedOptionsChanged() {
   $("#advanced_options_container").toggle($("#advanced_options").prop("checked"));
   $("#period").toggle($("#type").val() == "totp");
 }
-$("#advanced_options").on("change keyup", advanced_options_changed);
+$("#advanced_options").on("change keyup", onAdvancedOptionsChanged);
 
-function type_changed() {
+function onTypeChanged() {
   const type = $("#type").val();
   if (type == "totp") {
     $("#counter").hide();
@@ -183,14 +265,14 @@ function type_changed() {
   else {
     $("#counter").show();
   }
-  advanced_options_changed();
+  onAdvancedOptionsChanged();
 }
-type_changed();
-$("#type").on("change keyup", type_changed);
+onTypeChanged();
+$("#type").on("change keyup", onTypeChanged);
 
-function generate_uri() {
+function generateUri() {
   const type = $("#type").val();
-  const secret = $("#secret").val().replace(/ /g, '');
+  const secret = validateAndEncodeSecret($("#secret").val());
   const label = $("#label").val();
   const issuer = $("#issuer").val();
   const advanced_options = $("#advanced_options").prop("checked");
@@ -215,23 +297,24 @@ function generate_uri() {
   return uri;
 }
 
-function update_val(el, text) {
+function updateElenentValue(el, text) {
   const start = el.selectionStart;
   const end = el.selectionEnd;
   el.value = text;
   el.setSelectionRange(start, end);
 }
 
-function update_qr() {
+function updateQr() {
+  const uri = generateUri();
+  if (uri != $("#uri").val()) {
+    updateElenentValue($("#uri")[0], uri);
+  }
+  
   const secret = $("#secret").val().replace(/ /g, '');
   const issuer = $("#issuer").val();
   const label = $("#label").val();
   const size = $("#size").val();
-  const uri = generate_uri();
-  if (uri != $("#uri").val()) {
-    update_val($("#uri")[0], uri);
-  }
-
+  
   $("#qr").empty().qrcode({
     text: uri,
     size: size,
@@ -250,8 +333,8 @@ function update_qr() {
   $("#label").toggleClass("is-invalid", label == "");
 }
 
-update_qr();
-$("select,input[type='search'],input[type='checkbox'],input[type='range']").on("change keyup input", update_qr);
+updateQr();
+$("select,input[type='search'],input[type='checkbox'],input[type='range']").on("change keyup input", updateQr);
 
 function decode(s) {
   return s ? decodeURIComponent(s) : undefined;
@@ -272,9 +355,9 @@ $("#uri").on("change keyup input", function() {
   }
 
   $("#advanced_options").prop("checked", url.searchParams.has("algorithm") || url.searchParams.has("digits") || url.searchParams.has("period"));
-  advanced_options_changed();
+  onAdvancedOptionsChanged();
 
-  const uri = generate_uri();
+  const uri = generateUri();
   if (uri == this.value) {
     // uri did not change
     return;
@@ -290,8 +373,8 @@ $("#uri").on("change keyup input", function() {
   $("#algorithm").val(url.searchParams.get("algorithm") || "SHA1");
   $("#digits").val(url.searchParams.get("digits") || "6");
   $("#period").val(url.searchParams.get("period") == "30" ? "": url.searchParams.get("period"));
-  type_changed();
-  update_qr();
+  onTypeChanged();
+  updateQr();
 });
 </script>
 
@@ -307,8 +390,8 @@ $("#uri").on("change keyup input", function() {
     <hr>
 
     <ul>
-      <li>Made by <a href="https://stefansundin.github.io/">Stefan Sundin</a>.</li>
       <li>Get <a href="https://github.com/stefansundin/2fa-qr">the source code</a>.</li>
+      <li>Forked from 2FA QR app made by <a href="https://stefansundin.github.io/">Stefan Sundin</a>.</li>
       <li>Uses <a href="https://larsjung.de/jquery-qrcode/">jquery-qrcode</a>.</li>
       <li>See <a href="https://github.com/google/google-authenticator/wiki/Key-Uri-Format">the docs</a> for the URI format.</li>
     </ul>
